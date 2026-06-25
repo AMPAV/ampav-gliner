@@ -1,3 +1,4 @@
+import os
 import unittest
 
 from ampav.core.schema import NamedEntities, ToolOutput
@@ -14,6 +15,87 @@ SAMPLE_TEXT = (
     "Maya Chen visited Indiana University. "
     "Maya Chen later met Rafael Ortiz."
 )
+REAL_MODEL_TEST_ENV = "AMPAV_GLINER_REAL_MODEL_TEST"
+PROBE_THRESHOLD = 0.4
+
+ProbeCase = tuple[str, str, list[str], list[tuple[str, str, int, int]]]
+PROBE_CASES: list[ProbeCase] = [
+    (
+        "smoke",
+        "Dr. Maya Chen visited Indiana University, then met Rafael Ortiz in Bloomington.",
+        ["person", "organization", "location"],
+        [
+            ("Dr. Maya Chen", "person", 0, 13),
+            ("Indiana University", "organization", 22, 40),
+            ("Rafael Ortiz", "person", 51, 63),
+            ("Bloomington", "location", 67, 78),
+        ],
+    ),
+    (
+        "honorific",
+        "Dr. Smith met Prof. Anne-Marie ONeill at IU.",
+        ["person", "organization"],
+        [
+            ("Dr. Smith", "person", 0, 9),
+            ("Prof. Anne-Marie ONeill", "person", 14, 37),
+            ("IU", "organization", 41, 43),
+        ],
+    ),
+    (
+        "possessive_apostrophe",
+        "IU's Media School invited Maya Chen.",
+        ["organization", "person"],
+        [
+            ("IU", "organization", 0, 2),
+            ("Media School", "organization", 5, 17),
+            ("Maya Chen", "person", 26, 35),
+        ],
+    ),
+    (
+        "quoted",
+        'The panel quoted "Rafael Ortiz" during the session.',
+        ["person"],
+        [("Rafael Ortiz", "person", 18, 30)],
+    ),
+    (
+        "parenthesized",
+        "The award went to Maya Chen (Indiana University).",
+        ["person", "organization"],
+        [
+            ("Maya Chen", "person", 18, 27),
+            ("Indiana University", "organization", 29, 47),
+        ],
+    ),
+    (
+        "trailing_punctuation",
+        "Rafael Ortiz, Maya Chen, and Indiana University attended.",
+        ["person", "organization"],
+        [
+            ("Rafael Ortiz", "person", 0, 12),
+            ("Maya Chen", "person", 14, 23),
+            ("Indiana University", "organization", 29, 47),
+        ],
+    ),
+    (
+        "repeated",
+        "Maya Chen thanked Maya Chen after the talk.",
+        ["person"],
+        [
+            ("Maya Chen", "person", 0, 9),
+            ("Maya Chen", "person", 18, 27),
+        ],
+    ),
+    (
+        "internal_punctuation",
+        "Anne-Marie O'Neill visited WTIU-TV in Bloomington.",
+        ["person", "organization", "location"],
+        [
+            ("Anne-Marie O'Neill", "person", 0, 18),
+            ("WTIU-TV", "organization", 27, 34),
+            ("Bloomington", "location", 38, 49),
+        ],
+    ),
+]
 
 
 class FakeGlinerModel:
@@ -24,6 +106,58 @@ class FakeGlinerModel:
     def predict_entities(self, text: str, labels: list[str], **kwargs: object) -> list[dict]:
         self.calls.append({"text": text, "labels": labels, "kwargs": kwargs})
         return self.predictions
+
+
+class ProbeGlinerModel:
+    def __init__(self, cases: list[ProbeCase]) -> None:
+        self.predictions_by_text = {
+            text: [
+                {"text": entity_text, "label": entity_type, "start": start, "end": end, "score": 0.9}
+                for entity_text, entity_type, start, end in expected_entities
+            ]
+            for _, text, _, expected_entities in cases
+        }
+        self.calls: list[dict] = []
+
+    def predict_entities(self, text: str, labels: list[str], **kwargs: object) -> list[dict]:
+        self.calls.append({"text": text, "labels": labels, "kwargs": kwargs})
+        return self.predictions_by_text[text]
+
+
+def assert_probe_case(
+    test_case: unittest.TestCase,
+    extractor: GlinerNamedEntityExtractor,
+    name: str,
+    text: str,
+    labels: list[str],
+    expected_entities: list[tuple[str, str, int, int]],
+) -> ToolOutput:
+    result = extractor.extract(text, labels, threshold=PROBE_THRESHOLD)
+
+    test_case.assertIsInstance(result, ToolOutput, name)
+    test_case.assertEqual(result.tool_name, "gliner", name)
+    test_case.assertEqual(result.parameters["labels"], labels, name)
+    test_case.assertEqual(result.parameters["threshold"], PROBE_THRESHOLD, name)
+    test_case.assertIsInstance(result.output, NamedEntities, name)
+    assert isinstance(result.output, NamedEntities)
+    test_case.assertEqual(result.output.ampav_format, "named_entities/1", name)
+    test_case.assertEqual(result.output.text, text, name)
+    test_case.assertEqual(result.messages, [], name)
+
+    actual_entities = [
+        (entity.entity_text, entity.entity_type, entity.begin_offset, entity.end_offset)
+        for entity in result.output.entities
+    ]
+    test_case.assertEqual(actual_entities, expected_entities, name)
+    for entity in result.output.entities:
+        test_case.assertIsNotNone(entity.begin_offset, name)
+        test_case.assertIsNotNone(entity.end_offset, name)
+        assert entity.begin_offset is not None
+        assert entity.end_offset is not None
+        test_case.assertEqual(text[entity.begin_offset : entity.end_offset], entity.entity_text, name)
+        test_case.assertIsNone(entity.start_time, name)
+        test_case.assertIsNone(entity.end_time, name)
+    return result
 
 
 class GlinerNamedEntityExtractorTest(unittest.TestCase):
@@ -154,6 +288,34 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             extractor.extract(" ", ["person"])
+
+
+class GlinerProbeFixtureTest(unittest.TestCase):
+    def test_probe_fixtures_with_fake_model(self) -> None:
+        model = ProbeGlinerModel(PROBE_CASES)
+        extractor = GlinerNamedEntityExtractor(model=model)
+
+        for name, text, labels, expected_entities in PROBE_CASES:
+            with self.subTest(name=name):
+                assert_probe_case(self, extractor, name, text, labels, expected_entities)
+
+        self.assertEqual(
+            [call["kwargs"] for call in model.calls],
+            [{"flat_ner": True, "multi_label": False, "threshold": PROBE_THRESHOLD}] * len(PROBE_CASES),
+        )
+
+
+@unittest.skipUnless(
+    os.environ.get(REAL_MODEL_TEST_ENV) == "1",
+    f"set {REAL_MODEL_TEST_ENV}=1 to run cached real GLiNER model tests",
+)
+class GlinerRealModelProbeTest(unittest.TestCase):
+    def test_probe_fixtures_with_cached_default_model(self) -> None:
+        extractor = GlinerNamedEntityExtractor(local_files_only=True)
+
+        for name, text, labels, expected_entities in PROBE_CASES:
+            with self.subTest(name=name):
+                assert_probe_case(self, extractor, name, text, labels, expected_entities)
 
 
 if __name__ == "__main__":
