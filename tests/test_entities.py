@@ -1,11 +1,12 @@
 import os
 import unittest
 
-from ampav.core.schema import NamedEntities, ToolOutput
+from ampav.core.schema import NamedEntities, ToolOutput, Transcript, WordSegment
 
 from ampav.gliner import (
     GlinerNamedEntityExtractor,
     extract_named_entities,
+    extract_named_entities_from_transcript,
     gliner_predictions_to_named_entities,
     validate_labels,
 )
@@ -145,16 +146,16 @@ def assert_probe_case(
     test_case.assertEqual(result.messages, [], name)
 
     actual_entities = [
-        (entity.entity_text, entity.entity_type, entity.begin_offset, entity.end_offset)
-        for entity in result.output.entities
+        (entity.text, entity.entity_type, entity.begin_offset, entity.end_offset)
+        for entity in result.output.spans
     ]
     test_case.assertEqual(actual_entities, expected_entities, name)
-    for entity in result.output.entities:
+    for entity in result.output.spans:
         test_case.assertIsNotNone(entity.begin_offset, name)
         test_case.assertIsNotNone(entity.end_offset, name)
         assert entity.begin_offset is not None
         assert entity.end_offset is not None
-        test_case.assertEqual(text[entity.begin_offset : entity.end_offset], entity.entity_text, name)
+        test_case.assertEqual(text[entity.begin_offset : entity.end_offset], entity.text, name)
         test_case.assertIsNone(entity.start_time, name)
         test_case.assertIsNone(entity.end_time, name)
     return result
@@ -178,13 +179,13 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
         assert result.output is not None
         self.assertEqual(result.output.text, SAMPLE_TEXT)
         self.assertEqual(result.output.languages, ["en"])
-        self.assertEqual(len(result.output.entities), 2)
-        self.assertEqual(result.output.entities[0].entity_text, "Maya Chen")
-        self.assertEqual(result.output.entities[0].entity_type, "person")
-        self.assertEqual(result.output.entities[0].confidence, 0.98)
-        self.assertEqual(result.output.entities[0].begin_offset, 0)
-        self.assertEqual(result.output.entities[0].end_offset, 9)
-        self.assertEqual(result.output.entities[0].language, "en")
+        self.assertEqual(len(result.output.spans), 2)
+        self.assertEqual(result.output.spans[0].text, "Maya Chen")
+        self.assertEqual(result.output.spans[0].entity_type, "person")
+        self.assertEqual(result.output.spans[0].confidence, 0.98)
+        self.assertEqual(result.output.spans[0].begin_offset, 0)
+        self.assertEqual(result.output.spans[0].end_offset, 9)
+        self.assertEqual(result.output.spans[0].language, "en")
 
     def test_extract_records_model_and_inference_parameters(self) -> None:
         model = FakeGlinerModel([])
@@ -241,7 +242,7 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
 
         self.assertEqual(model.calls[0]["kwargs"], {"flat_ner": True, "multi_label": False})
 
-    def test_extract_can_include_raw_predictions_in_tool_private(self) -> None:
+    def test_extract_includes_raw_predictions_in_tool_private_by_default(self) -> None:
         predictions = [{"start": 0, "end": 9, "text": "Maya Chen", "label": "person", "score": 0.98}]
         model = FakeGlinerModel(predictions)
 
@@ -249,10 +250,91 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
             "Maya Chen visited Bloomington.",
             ["person"],
             model=model,
-            include_raw_output=True,
         )
 
         self.assertEqual(result.tool_private, {"gliner_predictions": predictions})
+
+    def test_extract_can_omit_raw_predictions_from_tool_private(self) -> None:
+        predictions = [{"start": 0, "end": 9, "text": "Maya Chen", "label": "person", "score": 0.98}]
+        model = FakeGlinerModel(predictions)
+
+        result = extract_named_entities(
+            "Maya Chen visited Bloomington.",
+            ["person"],
+            model=model,
+            include_raw_output=False,
+        )
+
+        self.assertIsNone(result.tool_private)
+
+    def test_extract_from_transcript_aligns_timestamps_from_canonical_words(self) -> None:
+        transcript = Transcript(
+            media_duration=12.3,
+            text="This raw transcript text is not used for model input.",
+            languages=["en"],
+            words=[
+                WordSegment(word="IU", suffix="'s", start_time=0.0, end_time=0.2),
+                WordSegment(word="Media", start_time=0.3, end_time=0.5),
+                WordSegment(word="School", start_time=0.6, end_time=0.8),
+                WordSegment(word="invited", start_time=0.9, end_time=1.1),
+                WordSegment(word="Maya", start_time=1.2, end_time=1.4),
+                WordSegment(word="Chen", suffix=".", start_time=1.5, end_time=1.7),
+            ],
+        )
+        model = FakeGlinerModel(
+            [
+                {"start": 0, "end": 2, "text": "IU", "label": "organization", "score": 0.91},
+                {"start": 26, "end": 35, "text": "Maya Chen", "label": "person", "score": 0.97},
+            ]
+        )
+        extractor = GlinerNamedEntityExtractor(model=model)
+
+        result = extractor.extract_from_transcript(transcript, ["organization", "person"])
+
+        self.assertEqual(model.calls[0]["text"], "IU's Media School invited Maya Chen.")
+        self.assertEqual(result.parameters["text_source"], "transcript_words")
+        self.assertEqual(result.parameters["text_separator"], " ")
+        self.assertEqual(result.messages, [])
+        self.assertIsInstance(result.output, NamedEntities)
+        assert isinstance(result.output, NamedEntities)
+        self.assertEqual(result.output.text, "IU's Media School invited Maya Chen.")
+        self.assertEqual(result.output.media_duration, 12.3)
+        self.assertEqual(result.output.languages, ["en"])
+        self.assertEqual(
+            [
+                (entity.text, entity.start_time, entity.end_time, entity.language)
+                for entity in result.output.spans
+            ],
+            [
+                ("IU", 0.0, 0.2, "en"),
+                ("Maya Chen", 1.2, 1.7, "en"),
+            ],
+        )
+
+    def test_extract_from_transcript_reports_alignment_failures_as_messages(self) -> None:
+        transcript = Transcript(
+            words=[
+                WordSegment(word="Amazon", start_time=1.0, end_time=1.5),
+            ],
+        )
+        predictions = [{"text": "Amazon", "label": "organization", "score": 0.92}]
+        model = FakeGlinerModel(predictions)
+
+        result = extract_named_entities_from_transcript(transcript, ["organization"], model=model)
+
+        self.assertEqual(result.messages, ["Text span 0 timestamp alignment skipped: missing offsets."])
+        self.assertEqual(result.tool_private, {"gliner_predictions": predictions})
+        self.assertIsInstance(result.output, NamedEntities)
+        assert isinstance(result.output, NamedEntities)
+        self.assertIsNone(result.output.spans[0].start_time)
+        self.assertIsNone(result.output.spans[0].end_time)
+        self.assertIsNone(result.output.spans[0].tool_private)
+
+    def test_extract_from_transcript_rejects_empty_words(self) -> None:
+        extractor = GlinerNamedEntityExtractor(model=FakeGlinerModel([]))
+
+        with self.assertRaises(ValueError):
+            extractor.extract_from_transcript(Transcript(), ["person"])
 
     def test_conversion_preserves_multiple_mentions(self) -> None:
         predictions = [
@@ -262,8 +344,8 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
 
         entities = gliner_predictions_to_named_entities(SAMPLE_TEXT, predictions)
 
-        self.assertEqual([entity.entity_text for entity in entities.entities], ["Maya Chen", "Maya Chen"])
-        self.assertEqual([entity.begin_offset for entity in entities.entities], [0, 38])
+        self.assertEqual([entity.text for entity in entities.spans], ["Maya Chen", "Maya Chen"])
+        self.assertEqual([entity.begin_offset for entity in entities.spans], [0, 38])
 
     def test_validate_labels_rejects_empty_labels(self) -> None:
         with self.assertRaises(ValueError):

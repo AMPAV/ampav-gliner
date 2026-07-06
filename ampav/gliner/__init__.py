@@ -5,6 +5,7 @@ from .entities import (
     GlinerModelOptions,
     GlinerNamedEntityExtractor,
     extract_named_entities,
+    extract_named_entities_from_transcript,
     gliner_predictions_to_named_entities,
     validate_labels,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "GlinerModelOptions",
     "GlinerNamedEntityExtractor",
     "extract_named_entities",
+    "extract_named_entities_from_transcript",
     "gliner_predictions_to_named_entities",
     "validate_labels",
 ]
