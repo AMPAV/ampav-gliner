@@ -8,6 +8,7 @@ from time import time
 from typing import Any
 
 from ampav.core.schema import NamedEntities, NamedEntity, ToolOutput, Transcript
+from ampav.core.schema.transcript import words_to_text
 
 
 DEFAULT_MODEL_ID = "urchade/gliner_small-v2.1"
@@ -118,7 +119,7 @@ class GlinerNamedEntityExtractor:
     ) -> ToolOutput:
         """Extract named entities from transcript words and align timestamps."""
         validate_transcript(transcript)
-        text = transcript.words_to_text(separator=separator)
+        text = words_to_text(transcript.words, separator=separator)
         validate_text(text)
         clean_labels = validate_labels(labels)
 

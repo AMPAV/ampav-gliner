@@ -6,7 +6,7 @@ This package provides a thin synchronous wrapper that extracts named entities
 from plain text and returns an AMPAV `ToolOutput` containing `NamedEntities`.
 
 `GlinerNamedEntityExtractor.extract_from_transcript(...)` accepts an AMPAV
-`Transcript`, sends canonical `Transcript.words_to_text()` text to GLiNER, and
+`Transcript`, sends canonical `words_to_text(transcript.words)` text to GLiNER, and
 adds best-effort timestamp alignment messages to `ToolOutput.messages`.
 
 Long-transcript chunking is not implemented yet.
