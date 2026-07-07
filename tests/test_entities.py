@@ -1,14 +1,11 @@
 import os
 import unittest
+from importlib.metadata import version
 
 from ampav.core.schema import NamedEntities, ToolOutput, Transcript, WordSegment
 
 from ampav.gliner import (
     GlinerNamedEntityExtractor,
-    extract_named_entities,
-    extract_named_entities_from_transcript,
-    gliner_predictions_to_named_entities,
-    validate_labels,
 )
 
 
@@ -175,6 +172,7 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
 
         self.assertIsInstance(result, ToolOutput)
         self.assertEqual(result.tool_name, "gliner")
+        self.assertEqual(result.tool_version, version("ampav-gliner"))
         self.assertIsInstance(result.output, NamedEntities)
         assert result.output is not None
         self.assertEqual(result.output.text, SAMPLE_TEXT)
@@ -245,11 +243,11 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
     def test_extract_includes_raw_predictions_in_tool_private_by_default(self) -> None:
         predictions = [{"start": 0, "end": 9, "text": "Maya Chen", "label": "person", "score": 0.98}]
         model = FakeGlinerModel(predictions)
+        extractor = GlinerNamedEntityExtractor(model=model)
 
-        result = extract_named_entities(
+        result = extractor.extract(
             "Maya Chen visited Bloomington.",
             ["person"],
-            model=model,
         )
 
         self.assertEqual(result.tool_private, {"gliner_predictions": predictions})
@@ -257,12 +255,11 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
     def test_extract_can_omit_raw_predictions_from_tool_private(self) -> None:
         predictions = [{"start": 0, "end": 9, "text": "Maya Chen", "label": "person", "score": 0.98}]
         model = FakeGlinerModel(predictions)
+        extractor = GlinerNamedEntityExtractor(model=model, include_tool_private=False)
 
-        result = extract_named_entities(
+        result = extractor.extract(
             "Maya Chen visited Bloomington.",
             ["person"],
-            model=model,
-            include_raw_output=False,
         )
 
         self.assertIsNone(result.tool_private)
@@ -319,8 +316,9 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
         )
         predictions = [{"text": "Amazon", "label": "organization", "score": 0.92}]
         model = FakeGlinerModel(predictions)
+        extractor = GlinerNamedEntityExtractor(model=model)
 
-        result = extract_named_entities_from_transcript(transcript, ["organization"], model=model)
+        result = extractor.extract_from_transcript(transcript, ["organization"])
 
         self.assertEqual(result.messages, ["Text span 0 timestamp alignment skipped: missing offsets."])
         self.assertEqual(result.tool_private, {"gliner_predictions": predictions})
@@ -336,34 +334,60 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             extractor.extract_from_transcript(Transcript(), ["person"])
 
+        with self.assertRaises(ValueError):
+            extractor.extract_from_transcript(Transcript(words=[WordSegment(word="")]), ["person"])
+
+    def test_extract_from_transcript_allows_punctuation_only_words(self) -> None:
+        model = FakeGlinerModel([])
+        extractor = GlinerNamedEntityExtractor(model=model)
+
+        result = extractor.extract_from_transcript(
+            Transcript(words=[WordSegment(word=".")]),
+            ["person"],
+        )
+
+        self.assertEqual(model.calls[0]["text"], ".")
+        self.assertIsInstance(result.output, NamedEntities)
+        assert isinstance(result.output, NamedEntities)
+        self.assertEqual(result.output.spans, [])
+
     def test_conversion_preserves_multiple_mentions(self) -> None:
         predictions = [
             {"start": 0, "end": 9, "text": "Maya Chen", "label": "person", "score": 0.98},
             {"start": 38, "end": 47, "text": "Maya Chen", "label": "person", "score": 0.97},
         ]
+        model = FakeGlinerModel(predictions)
+        extractor = GlinerNamedEntityExtractor(model=model)
 
-        entities = gliner_predictions_to_named_entities(SAMPLE_TEXT, predictions)
+        result = extractor.extract(SAMPLE_TEXT, ["person"])
 
+        self.assertIsInstance(result.output, NamedEntities)
+        assert isinstance(result.output, NamedEntities)
+        entities = result.output
         self.assertEqual([entity.text for entity in entities.spans], ["Maya Chen", "Maya Chen"])
         self.assertEqual([entity.begin_offset for entity in entities.spans], [0, 38])
 
     def test_validate_labels_rejects_empty_labels(self) -> None:
+        extractor = GlinerNamedEntityExtractor(model=FakeGlinerModel([]))
         with self.assertRaises(ValueError):
-            validate_labels(["person", " "])
+            extractor.extract("Maya Chen visited Bloomington.", ["person", " "])
 
     def test_validate_labels_rejects_exact_duplicates(self) -> None:
+        extractor = GlinerNamedEntityExtractor(model=FakeGlinerModel([]))
         with self.assertRaises(ValueError):
-            validate_labels(["person", "person"])
+            extractor.extract("Maya Chen visited Bloomington.", ["person", "person"])
 
     def test_validate_labels_rejects_normalized_duplicates(self) -> None:
+        extractor = GlinerNamedEntityExtractor(model=FakeGlinerModel([]))
         with self.assertRaises(ValueError):
-            validate_labels(["Person", " person "])
+            extractor.extract("Maya Chen visited Bloomington.", ["Person", " person "])
         with self.assertRaises(ValueError):
-            validate_labels(["geo  location", "geo location"])
+            extractor.extract("Maya Chen visited Bloomington.", ["geo  location", "geo location"])
 
     def test_validate_labels_rejects_string_instead_of_sequence(self) -> None:
+        extractor = GlinerNamedEntityExtractor(model=FakeGlinerModel([]))
         with self.assertRaises(TypeError):
-            validate_labels("person")
+            extractor.extract("Maya Chen visited Bloomington.", "person")
 
     def test_extract_rejects_empty_text(self) -> None:
         extractor = GlinerNamedEntityExtractor(model=FakeGlinerModel([]))
