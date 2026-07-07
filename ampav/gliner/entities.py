@@ -12,7 +12,7 @@ from ampav.core.schema import NamedEntities, NamedEntity, ToolOutput, Transcript
 
 DEFAULT_MODEL_ID = "urchade/gliner_small-v2.1"
 TOOL_NAME = "gliner"
-TOOL_VERSION = "0.0.1"
+TOOL_VERSION = "0.0.2"
 
 
 @dataclass(frozen=True)
