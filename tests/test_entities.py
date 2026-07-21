@@ -1,8 +1,9 @@
 import os
 import unittest
 from importlib.metadata import version
+from types import SimpleNamespace
 
-from ampav.core.schema import NamedEntities, ToolOutput, Transcript, WordSegment
+from ampav.core.schema import NamedEntities, ToolOutput
 
 from ampav.gliner import (
     GlinerNamedEntityExtractor,
@@ -97,20 +98,35 @@ PROBE_CASES: list[ProbeCase] = [
 
 
 class FakeGlinerModel:
-    def __init__(self, predictions: list[dict]) -> None:
+    def __init__(
+        self,
+        predictions: list[dict] | dict[str, list[dict]],
+        *,
+        max_len: int = 384,
+    ) -> None:
         self.predictions = predictions
+        self.config = SimpleNamespace(max_len=max_len)
         self.calls: list[dict] = []
 
     def predict_entities(self, text: str, labels: list[str], **kwargs: object) -> list[dict]:
         self.calls.append({"text": text, "labels": labels, "kwargs": kwargs})
+        if isinstance(self.predictions, dict):
+            return self.predictions.get(text, [])
         return self.predictions
 
 
 class ProbeGlinerModel:
     def __init__(self, cases: list[ProbeCase]) -> None:
+        self.config = SimpleNamespace(max_len=384)
         self.predictions_by_text = {
             text: [
-                {"text": entity_text, "label": entity_type, "start": start, "end": end, "score": 0.9}
+                {
+                    "text": entity_text,
+                    "label": entity_type,
+                    "start": start,
+                    "end": end,
+                    "score": 0.9,
+                }
                 for entity_text, entity_type, start, end in expected_entities
             ]
             for _, text, _, expected_entities in cases
@@ -122,6 +138,13 @@ class ProbeGlinerModel:
         return self.predictions_by_text[text]
 
 
+class TokenizingFakeGlinerModel(FakeGlinerModel):
+    def prepare_inputs(self, texts: list[str]) -> tuple[list[list[str]], list, list]:
+        """Split hyphenated words to prove native token weighting is used."""
+        tokens = [text.strip().replace("-", " ").split() for text in texts]
+        return tokens, [], []
+
+
 def assert_probe_case(
     test_case: unittest.TestCase,
     extractor: GlinerNamedEntityExtractor,
@@ -130,7 +153,7 @@ def assert_probe_case(
     labels: list[str],
     expected_entities: list[tuple[str, str, int, int]],
 ) -> ToolOutput:
-    result = extractor.extract(text, labels, threshold=PROBE_THRESHOLD)
+    result = extractor.process(text, labels, threshold=PROBE_THRESHOLD)
 
     test_case.assertIsInstance(result, ToolOutput, name)
     test_case.assertEqual(result.tool_name, "gliner", name)
@@ -159,16 +182,22 @@ def assert_probe_case(
 
 
 class GlinerNamedEntityExtractorTest(unittest.TestCase):
-    def test_extract_returns_tool_output_with_named_entities(self) -> None:
+    def test_process_returns_tool_output_with_named_entities(self) -> None:
         model = FakeGlinerModel(
             [
                 {"start": 0, "end": 9, "text": "Maya Chen", "label": "person", "score": 0.98},
-                {"start": 18, "end": 36, "text": "Indiana University", "label": "organization", "score": 0.95},
+                {
+                    "start": 18,
+                    "end": 36,
+                    "text": "Indiana University",
+                    "label": "organization",
+                    "score": 0.95,
+                },
             ]
         )
         extractor = GlinerNamedEntityExtractor(model=model)
 
-        result = extractor.extract(SAMPLE_TEXT, ["person", "organization"], language="en")
+        result = extractor.process(SAMPLE_TEXT, ["person", "organization"], language="en")
 
         self.assertIsInstance(result, ToolOutput)
         self.assertEqual(result.tool_name, "gliner")
@@ -185,7 +214,7 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
         self.assertEqual(result.output.spans[0].end_offset, 9)
         self.assertEqual(result.output.spans[0].language, "en")
 
-    def test_extract_records_model_and_inference_parameters(self) -> None:
+    def test_process_records_model_and_inference_parameters(self) -> None:
         model = FakeGlinerModel([])
         extractor = GlinerNamedEntityExtractor(
             model_id="local/model",
@@ -196,7 +225,7 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
             model=model,
         )
 
-        result = extractor.extract(
+        result = extractor.process(
             "Maya Chen visited Bloomington.",
             [" person ", "location"],
             threshold=0.4,
@@ -220,6 +249,9 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
                 "multi_label": False,
                 "batch_size": 8,
                 "language": "en",
+                "model_max_tokens": 384,
+                "chunk_overlap_tokens": 0,
+                "chunk_count": 1,
             },
         )
         self.assertEqual(
@@ -232,124 +264,69 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
             },
         )
 
-    def test_extract_uses_gliner_defaults_when_threshold_and_batch_size_are_none(self) -> None:
+    def test_process_uses_gliner_defaults_when_optional_values_are_none(self) -> None:
         model = FakeGlinerModel([])
         extractor = GlinerNamedEntityExtractor(model=model)
 
-        extractor.extract("Maya Chen visited Bloomington.", ["person"])
+        extractor.process("Maya Chen visited Bloomington.", ["person"])
 
         self.assertEqual(model.calls[0]["kwargs"], {"flat_ner": True, "multi_label": False})
 
-    def test_extract_includes_raw_predictions_in_tool_private_by_default(self) -> None:
-        predictions = [{"start": 0, "end": 9, "text": "Maya Chen", "label": "person", "score": 0.98}]
+    def test_process_includes_raw_predictions_when_requested(self) -> None:
+        predictions = [
+            {
+                "start": 0,
+                "end": 9,
+                "text": "Maya Chen",
+                "label": "person",
+                "score": 0.98,
+            }
+        ]
         model = FakeGlinerModel(predictions)
-        extractor = GlinerNamedEntityExtractor(model=model)
+        extractor = GlinerNamedEntityExtractor(
+            model=model,
+            include_tool_private=True,
+        )
 
-        result = extractor.extract(
+        result = extractor.process(
             "Maya Chen visited Bloomington.",
             ["person"],
         )
 
-        self.assertEqual(result.tool_private, {"gliner_predictions": predictions})
+        self.assertEqual(
+            result.tool_private,
+            {
+                "gliner_chunks": [
+                    {
+                        "begin_offset": 0,
+                        "end_offset": 30,
+                        "owned_begin_offset": 0,
+                        "owned_end_offset": 30,
+                        "predictions": predictions,
+                    }
+                ]
+            },
+        )
 
-    def test_extract_can_omit_raw_predictions_from_tool_private(self) -> None:
-        predictions = [{"start": 0, "end": 9, "text": "Maya Chen", "label": "person", "score": 0.98}]
+    def test_process_omits_raw_predictions_by_default(self) -> None:
+        predictions = [
+            {
+                "start": 0,
+                "end": 9,
+                "text": "Maya Chen",
+                "label": "person",
+                "score": 0.98,
+            }
+        ]
         model = FakeGlinerModel(predictions)
-        extractor = GlinerNamedEntityExtractor(model=model, include_tool_private=False)
+        extractor = GlinerNamedEntityExtractor(model=model)
 
-        result = extractor.extract(
+        result = extractor.process(
             "Maya Chen visited Bloomington.",
             ["person"],
         )
 
         self.assertIsNone(result.tool_private)
-
-    def test_extract_from_transcript_aligns_timestamps_from_canonical_words(self) -> None:
-        transcript = Transcript(
-            media_duration=12.3,
-            text="This raw transcript text is not used for model input.",
-            languages=["en"],
-            words=[
-                WordSegment(word="IU", suffix="'s", start_time=0.0, end_time=0.2),
-                WordSegment(word="Media", start_time=0.3, end_time=0.5),
-                WordSegment(word="School", start_time=0.6, end_time=0.8),
-                WordSegment(word="invited", start_time=0.9, end_time=1.1),
-                WordSegment(word="Maya", start_time=1.2, end_time=1.4),
-                WordSegment(word="Chen", suffix=".", start_time=1.5, end_time=1.7),
-            ],
-        )
-        model = FakeGlinerModel(
-            [
-                {"start": 0, "end": 2, "text": "IU", "label": "organization", "score": 0.91},
-                {"start": 26, "end": 35, "text": "Maya Chen", "label": "person", "score": 0.97},
-            ]
-        )
-        extractor = GlinerNamedEntityExtractor(model=model)
-
-        result = extractor.extract_from_transcript(transcript, ["organization", "person"])
-
-        self.assertEqual(model.calls[0]["text"], "IU's Media School invited Maya Chen.")
-        self.assertEqual(result.parameters["text_source"], "transcript_words")
-        self.assertEqual(result.parameters["text_separator"], " ")
-        self.assertEqual(result.messages, [])
-        self.assertIsInstance(result.output, NamedEntities)
-        assert isinstance(result.output, NamedEntities)
-        self.assertEqual(result.output.text, "IU's Media School invited Maya Chen.")
-        self.assertEqual(result.output.media_duration, 12.3)
-        self.assertEqual(result.output.languages, ["en"])
-        self.assertEqual(
-            [
-                (entity.text, entity.start_time, entity.end_time, entity.language)
-                for entity in result.output.spans
-            ],
-            [
-                ("IU", 0.0, 0.2, "en"),
-                ("Maya Chen", 1.2, 1.7, "en"),
-            ],
-        )
-
-    def test_extract_from_transcript_reports_alignment_failures_as_messages(self) -> None:
-        transcript = Transcript(
-            words=[
-                WordSegment(word="Amazon", start_time=1.0, end_time=1.5),
-            ],
-        )
-        predictions = [{"text": "Amazon", "label": "organization", "score": 0.92}]
-        model = FakeGlinerModel(predictions)
-        extractor = GlinerNamedEntityExtractor(model=model)
-
-        result = extractor.extract_from_transcript(transcript, ["organization"])
-
-        self.assertEqual(result.messages, ["Text span 0 timestamp alignment skipped: missing offsets."])
-        self.assertEqual(result.tool_private, {"gliner_predictions": predictions})
-        self.assertIsInstance(result.output, NamedEntities)
-        assert isinstance(result.output, NamedEntities)
-        self.assertIsNone(result.output.spans[0].start_time)
-        self.assertIsNone(result.output.spans[0].end_time)
-        self.assertIsNone(result.output.spans[0].tool_private)
-
-    def test_extract_from_transcript_rejects_empty_words(self) -> None:
-        extractor = GlinerNamedEntityExtractor(model=FakeGlinerModel([]))
-
-        with self.assertRaises(ValueError):
-            extractor.extract_from_transcript(Transcript(), ["person"])
-
-        with self.assertRaises(ValueError):
-            extractor.extract_from_transcript(Transcript(words=[WordSegment(word="")]), ["person"])
-
-    def test_extract_from_transcript_allows_punctuation_only_words(self) -> None:
-        model = FakeGlinerModel([])
-        extractor = GlinerNamedEntityExtractor(model=model)
-
-        result = extractor.extract_from_transcript(
-            Transcript(words=[WordSegment(word=".")]),
-            ["person"],
-        )
-
-        self.assertEqual(model.calls[0]["text"], ".")
-        self.assertIsInstance(result.output, NamedEntities)
-        assert isinstance(result.output, NamedEntities)
-        self.assertEqual(result.output.spans, [])
 
     def test_conversion_preserves_multiple_mentions(self) -> None:
         predictions = [
@@ -359,7 +336,7 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
         model = FakeGlinerModel(predictions)
         extractor = GlinerNamedEntityExtractor(model=model)
 
-        result = extractor.extract(SAMPLE_TEXT, ["person"])
+        result = extractor.process(SAMPLE_TEXT, ["person"])
 
         self.assertIsInstance(result.output, NamedEntities)
         assert isinstance(result.output, NamedEntities)
@@ -367,33 +344,99 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
         self.assertEqual([entity.text for entity in entities.spans], ["Maya Chen", "Maya Chen"])
         self.assertEqual([entity.begin_offset for entity in entities.spans], [0, 38])
 
+    def test_process_chunks_and_rebases_overlapping_predictions(self) -> None:
+        text = "one two three four"
+        model = FakeGlinerModel(
+            {
+                "one two ": [
+                    {"start": 4, "end": 7, "text": "two", "label": "number"},
+                ],
+                "one two three ": [
+                    {"start": 4, "end": 7, "text": "two", "label": "number"},
+                ],
+                "two three four": [
+                    {"start": 4, "end": 9, "text": "three", "label": "number"},
+                ],
+                "three four": [],
+            },
+            max_len=3,
+        )
+        extractor = GlinerNamedEntityExtractor(model=model)
+
+        result = extractor.process(
+            text,
+            ["number"],
+            chunk_overlap_tokens=1,
+        )
+
+        self.assertEqual([call["text"] for call in model.calls], list(model.predictions))
+        self.assertEqual(result.parameters["model_max_tokens"], 3)
+        self.assertEqual(result.parameters["chunk_overlap_tokens"], 1)
+        self.assertEqual(result.parameters["chunk_count"], 4)
+        self.assertIsInstance(result.output, NamedEntities)
+        assert isinstance(result.output, NamedEntities)
+        self.assertEqual(result.output.text, text)
+        self.assertEqual(
+            [
+                (entity.text, entity.begin_offset, entity.end_offset)
+                for entity in result.output.spans
+            ],
+            [("two", 4, 7), ("three", 8, 13)],
+        )
+
+    def test_process_rejects_predictions_without_usable_offsets(self) -> None:
+        model = FakeGlinerModel(
+            [{"text": "Amazon", "label": "organization", "score": 0.92}]
+        )
+        extractor = GlinerNamedEntityExtractor(model=model)
+
+        with self.assertRaises(ValueError):
+            extractor.process("Amazon", ["organization"])
+
+    def test_process_requires_a_model_token_limit(self) -> None:
+        model = FakeGlinerModel([])
+        model.config.max_len = None
+        extractor = GlinerNamedEntityExtractor(model=model)
+
+        with self.assertRaises(RuntimeError):
+            extractor.process("Amazon", ["organization"])
+
+    def test_process_uses_model_token_weights_for_chunk_limits(self) -> None:
+        model = TokenizingFakeGlinerModel([], max_len=2)
+        extractor = GlinerNamedEntityExtractor(model=model)
+
+        result = extractor.process("one-two three", ["number"])
+
+        self.assertEqual([call["text"] for call in model.calls], ["one-two ", "three"])
+        self.assertEqual(result.parameters["chunk_count"], 2)
+
     def test_validate_labels_rejects_empty_labels(self) -> None:
         extractor = GlinerNamedEntityExtractor(model=FakeGlinerModel([]))
         with self.assertRaises(ValueError):
-            extractor.extract("Maya Chen visited Bloomington.", ["person", " "])
+            extractor.process("Maya Chen visited Bloomington.", ["person", " "])
 
     def test_validate_labels_rejects_exact_duplicates(self) -> None:
         extractor = GlinerNamedEntityExtractor(model=FakeGlinerModel([]))
         with self.assertRaises(ValueError):
-            extractor.extract("Maya Chen visited Bloomington.", ["person", "person"])
+            extractor.process("Maya Chen visited Bloomington.", ["person", "person"])
 
     def test_validate_labels_rejects_normalized_duplicates(self) -> None:
         extractor = GlinerNamedEntityExtractor(model=FakeGlinerModel([]))
         with self.assertRaises(ValueError):
-            extractor.extract("Maya Chen visited Bloomington.", ["Person", " person "])
+            extractor.process("Maya Chen visited Bloomington.", ["Person", " person "])
         with self.assertRaises(ValueError):
-            extractor.extract("Maya Chen visited Bloomington.", ["geo  location", "geo location"])
+            extractor.process("Maya Chen visited Bloomington.", ["geo  location", "geo location"])
 
     def test_validate_labels_rejects_string_instead_of_sequence(self) -> None:
         extractor = GlinerNamedEntityExtractor(model=FakeGlinerModel([]))
         with self.assertRaises(TypeError):
-            extractor.extract("Maya Chen visited Bloomington.", "person")
+            extractor.process("Maya Chen visited Bloomington.", "person")
 
-    def test_extract_rejects_empty_text(self) -> None:
+    def test_process_rejects_empty_text(self) -> None:
         extractor = GlinerNamedEntityExtractor(model=FakeGlinerModel([]))
 
         with self.assertRaises(ValueError):
-            extractor.extract(" ", ["person"])
+            extractor.process(" ", ["person"])
 
 
 class GlinerProbeFixtureTest(unittest.TestCase):
@@ -407,7 +450,14 @@ class GlinerProbeFixtureTest(unittest.TestCase):
 
         self.assertEqual(
             [call["kwargs"] for call in model.calls],
-            [{"flat_ner": True, "multi_label": False, "threshold": PROBE_THRESHOLD}] * len(PROBE_CASES),
+            [
+                {
+                    "flat_ner": True,
+                    "multi_label": False,
+                    "threshold": PROBE_THRESHOLD,
+                }
+            ]
+            * len(PROBE_CASES),
         )
 
 
