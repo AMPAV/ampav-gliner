@@ -1,6 +1,6 @@
 [project]
 name = "ampav-gliner"
-version = "0.0.3"
+version = "0.0.4"
 description = "GLiNER tooling for the AMPAV environment"
 readme = "README.md"
 license = "Apache-2.0"
@@ -13,7 +13,7 @@ authors = [
 
 requires-python = ">=3.12"
 dependencies = [
-    "ampav-core>=0.0.17",
+    "ampav-core>=0.0.18",
     "gliner==0.2.26",
 ]
 
@@ -21,6 +21,9 @@ dependencies = [
 Homepage = "https://github.com/AMPAV/ampav-gliner"
 Repository = "https://github.com/AMPAV/ampav-gliner.git"
 Issues = "https://github.com/AMPAV/ampav-gliner/issues"
+
+[project.scripts]
+ampav_gliner_entities = "ampav_gliner_cli.entities:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
