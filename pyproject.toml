@@ -16,7 +16,7 @@ dependencies = [
     "ampav-core>=0.0.18",
     "datasets",
     "evaluate",
-    "gliner==0.2.27",
+    "gliner==0.2.28",
     "scikit-learn",
 ]
 
