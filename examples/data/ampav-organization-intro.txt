@@ -1,0 +1,3 @@
+Welcome to the AMPAV (Augmented Metadata Pipelines for Audio/Video) community health and documentation repository. This repository serves as the central hub for organization-level configurations, project standards, and the primary knowledge base.
+
+We maintain our technical specifications, architectural decisions, and development workflows in the Wiki to ensure they are easily searchable and up-to-date.
