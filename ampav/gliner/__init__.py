@@ -1,5 +1,6 @@
 """GLiNER tools for AMPAV."""
 
+from .classification import GlinerTextClassifier
 from .entities import (
     DEFAULT_MODEL_ID,
     GlinerModelOptions,
@@ -14,5 +15,6 @@ __all__ = [
     "GlinerModelOptions",
     "GlinerNamedEntityExtractor",
     "GlinerSummarizer",
+    "GlinerTextClassifier",
     "__version__",
 ]
