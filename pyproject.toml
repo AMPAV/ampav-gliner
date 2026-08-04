@@ -14,7 +14,10 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "ampav-core>=0.0.18",
-    "gliner==0.2.26",
+    "datasets",
+    "evaluate",
+    "gliner==0.2.27",
+    "scikit-learn",
 ]
 
 [project.urls]
