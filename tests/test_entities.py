@@ -216,19 +216,26 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
         self.assertEqual(result.output.spans[0].end_offset, 9)
         self.assertEqual(result.output.spans[0].language, "en")
 
-    def test_process_maps_canonical_phrase_and_arbitrary_label(self) -> None:
+    def test_process_maps_commercial_labels_and_arbitrary_label(self) -> None:
         model = FakeGlinerModel(
             [
                 {
                     "start": 0,
                     "end": 6,
                     "text": "Kindle",
-                    "label": "commercial item",
+                    "label": "product",
                     "score": 0.95,
                 },
                 {
                     "start": 7,
                     "end": 13,
+                    "text": "Nimbus",
+                    "label": "service",
+                    "score": 0.92,
+                },
+                {
+                    "start": 14,
+                    "end": 20,
                     "text": "ENG-42",
                     "label": "product code",
                     "score": 0.9,
@@ -238,18 +245,17 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
         extractor = GlinerNamedEntityExtractor(model=model)
 
         result = extractor.process(
-            "Kindle ENG-42",
-            ["commercial item", "product code"],
+            "Kindle Nimbus ENG-42",
+            ["product", "service", "product code"],
         )
 
         assert isinstance(result.output, NamedEntities)
-        self.assertEqual(result.output.spans[0].label, "commercial item")
-        self.assertEqual(
-            result.output.spans[0].type,
-            NamedEntityType.COMMERCIAL_ITEM,
-        )
-        self.assertEqual(result.output.spans[1].label, "product code")
-        self.assertEqual(result.output.spans[1].type, NamedEntityType.OTHER)
+        self.assertEqual(result.output.spans[0].label, "product")
+        self.assertEqual(result.output.spans[0].type, NamedEntityType.BRAND)
+        self.assertEqual(result.output.spans[1].label, "service")
+        self.assertEqual(result.output.spans[1].type, NamedEntityType.BRAND)
+        self.assertEqual(result.output.spans[2].label, "product code")
+        self.assertEqual(result.output.spans[2].type, NamedEntityType.OTHER)
 
     def test_process_records_model_and_inference_parameters(self) -> None:
         model = FakeGlinerModel([])
@@ -309,7 +315,7 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
 
         self.assertEqual(model.calls[0]["kwargs"], {"flat_ner": True, "multi_label": False})
 
-    def test_process_uses_concrete_core_entity_types_when_labels_are_omitted(self) -> None:
+    def test_process_uses_starter_labels_when_labels_are_omitted(self) -> None:
         model = FakeGlinerModel([])
         extractor = GlinerNamedEntityExtractor(model=model)
 
@@ -317,8 +323,8 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
 
         self.assertEqual(model.calls[0]["labels"], list(DEFAULT_NAMED_ENTITY_LABELS))
         self.assertEqual(result.parameters["labels"], list(DEFAULT_NAMED_ENTITY_LABELS))
-        self.assertNotIn("other", DEFAULT_NAMED_ENTITY_LABELS)
-        self.assertNotIn("unknown", DEFAULT_NAMED_ENTITY_LABELS)
+        self.assertIn("product", DEFAULT_NAMED_ENTITY_LABELS)
+        self.assertIn("service", DEFAULT_NAMED_ENTITY_LABELS)
 
     def test_process_includes_raw_predictions_when_requested(self) -> None:
         predictions = [

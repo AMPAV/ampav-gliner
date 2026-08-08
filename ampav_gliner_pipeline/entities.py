@@ -29,8 +29,8 @@ def extract_named_entities_from_transcript(
 
     Args:
         transcript: Source transcript; canonical text comes from its words.
-        labels: Entity labels requested from GLiNER. ``None`` uses the AMPAV
-            default named-entity labels.
+        labels: Entity labels requested from GLiNER. ``None`` uses the GLiNER
+            starter labels.
         extractor: Optional configured or preloaded extractor.
         threshold: Optional confidence threshold; ``None`` uses GLiNER's default.
         flat_ner: If true, prevent nested entity spans.
@@ -90,8 +90,8 @@ def extract_named_entities_from_file(
 
     Args:
         source: Path to the source text file; the file remains caller-owned.
-        labels: Entity labels requested from GLiNER. ``None`` uses the AMPAV
-            default named-entity labels.
+        labels: Entity labels requested from GLiNER. ``None`` uses the GLiNER
+            starter labels.
         extractor: Optional configured or preloaded extractor.
         encoding: Character encoding used to read the file.
         threshold: Optional confidence threshold; ``None`` uses GLiNER's default.
