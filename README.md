@@ -18,13 +18,15 @@ from ampav.gliner import GlinerNamedEntityExtractor
 extractor = GlinerNamedEntityExtractor()
 result = extractor.process(
     "Maya Chen visited Indiana University.",
-    ["person", "organization"],
     threshold=0.4,
 )
 print(result.model_dump_yaml(sort_keys=False))
 ```
 
-`process(...)` uses the loaded model's `config.max_len` automatically. Set
+When labels are omitted, `process(...)` derives its defaults from all concrete
+core `NamedEntityType` values. Pass a label list to replace those defaults with
+application-specific labels. `process(...)` uses the loaded model's
+`config.max_len` automatically. Set
 `chunk_overlap_tokens` when entity detection needs context around long-text
 chunk boundaries. Raw per-chunk model predictions are omitted by default; use
 `include_tool_private=True` on the extractor only for troubleshooting.
@@ -54,11 +56,11 @@ See `examples/gliner_text_example.py` and
 
 ## CLI
 
-The one-shot CLI accepts a UTF-8 text file followed by one or more labels and
-prints `ToolOutput` YAML:
+The one-shot CLI accepts a UTF-8 text file followed by optional labels and
+prints `ToolOutput` YAML. With no labels, it uses the AMPAV defaults:
 
 ```bash
-ampav_gliner_entities transcript.txt person organization location --threshold 0.4
+ampav_gliner_entities transcript.txt --threshold 0.4
 ```
 
 Use `ampav_gliner_entities --help` for model cache, offline, chunk overlap, and

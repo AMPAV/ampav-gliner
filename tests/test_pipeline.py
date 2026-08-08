@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ampav.core.schema import NamedEntities, Transcript, WordSegment
-from ampav.gliner import GlinerNamedEntityExtractor
+from ampav.gliner import DEFAULT_NAMED_ENTITY_LABELS, GlinerNamedEntityExtractor
 from ampav_gliner_pipeline import (
     extract_named_entities_from_file,
     extract_named_entities_from_transcript,
@@ -114,11 +114,11 @@ class TranscriptPipelineTest(unittest.TestCase):
 
         result = extract_named_entities_from_transcript(
             Transcript(words=[WordSegment(word=".")]),
-            ["person"],
             extractor=extractor,
         )
 
         self.assertEqual(model.calls[0]["text"], ".")
+        self.assertEqual(model.calls[0]["labels"], list(DEFAULT_NAMED_ENTITY_LABELS))
         self.assertIsInstance(result.output, NamedEntities)
         assert isinstance(result.output, NamedEntities)
         self.assertEqual(result.output.spans, [])

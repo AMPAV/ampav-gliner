@@ -21,6 +21,11 @@ from ._version import DISTRIBUTION_NAME, __version__
 
 
 DEFAULT_MODEL_ID = "urchade/gliner_small-v2.1"
+DEFAULT_NAMED_ENTITY_LABELS = tuple(
+    entity_type.value.replace("_", " ")
+    for entity_type in NamedEntityType
+    if entity_type not in {NamedEntityType.OTHER, NamedEntityType.UNKNOWN}
+)
 logger = logging.getLogger(__name__)
 
 
@@ -123,7 +128,7 @@ class GlinerNamedEntityExtractor:
     def process(
         self,
         text: str,
-        labels: Sequence[str],
+        labels: Sequence[str] | None = None,
         *,
         threshold: float | None = None,
         flat_ner: bool = True,
@@ -140,7 +145,8 @@ class GlinerNamedEntityExtractor:
 
         Args:
             text: Original source text. Final entity offsets refer to this text.
-            labels: Non-empty, unique entity labels requested from GLiNER.
+            labels: Entity labels requested from GLiNER. ``None`` uses all
+                concrete AMPAV named-entity types; an empty list is invalid.
             threshold: Optional confidence threshold; ``None`` uses GLiNER's
                 default.
             flat_ner: If true, prevent nested entity spans.
@@ -168,7 +174,7 @@ class GlinerNamedEntityExtractor:
         self,
         text: str,
         units: Sequence[TextUnit],
-        labels: Sequence[str],
+        labels: Sequence[str] | None = None,
         *,
         threshold: float | None = None,
         flat_ner: bool = True,
@@ -187,7 +193,7 @@ class GlinerNamedEntityExtractor:
         callers should use :meth:`process`.
         """
         _validate_text(text)
-        clean_labels = _validate_labels(labels)
+        clean_labels = _resolve_labels(labels)
         max_tokens = self._model_max_tokens()
         chunks = chunk_text(
             text,
@@ -351,7 +357,7 @@ def _gliner_predictions_to_named_entities(
 def _named_entity_type_for_label(label: str) -> NamedEntityType:
     """Map exact canonical GLiNER labels and classify other labels as OTHER."""
     try:
-        return NamedEntityType(label.strip().casefold())
+        return NamedEntityType("_".join(label.strip().casefold().split()))
     except ValueError:
         return NamedEntityType.OTHER
 
@@ -362,6 +368,13 @@ def _validate_text(text: str) -> None:
         raise TypeError("text must be a string")
     if not text.strip():
         raise ValueError("text must not be empty")
+
+
+def _resolve_labels(labels: Sequence[str] | None) -> list[str]:
+    """Return explicit labels or the concrete AMPAV default labels."""
+    if labels is None:
+        return list(DEFAULT_NAMED_ENTITY_LABELS)
+    return _validate_labels(labels)
 
 
 def _validate_labels(labels: Sequence[str]) -> list[str]:
