@@ -8,7 +8,7 @@ import re
 from time import time
 from typing import Any
 
-from ampav.core.schema import NamedEntities, NamedEntity, ToolOutput
+from ampav.core.schema import NamedEntities, NamedEntity, NamedEntityType, ToolOutput
 from ampav.core.text_chunking import (
     TextChunk,
     TextUnit,
@@ -319,30 +319,41 @@ def _gliner_predictions_to_named_entities(
     language: str | None = None,
 ) -> NamedEntities:
     """Convert chunk-local GLiNER dictionaries into AMPAV entities."""
-    entities = [
-        NamedEntity(
-            text=str(prediction["text"]),
-            entity_type=str(prediction["label"]),
-            confidence=(
-                None
-                if prediction.get("score") is None
-                else float(prediction["score"])
-            ),
-            begin_offset=(
-                None if prediction.get("start") is None else int(prediction["start"])
-            ),
-            end_offset=(
-                None if prediction.get("end") is None else int(prediction["end"])
-            ),
-            language=language,
+    entities = []
+    for prediction in predictions:
+        label = str(prediction["label"])
+        entities.append(
+            NamedEntity(
+                text=str(prediction["text"]),
+                type=_named_entity_type_for_label(label),
+                label=label,
+                confidence=(
+                    None
+                    if prediction.get("score") is None
+                    else float(prediction["score"])
+                ),
+                begin_offset=(
+                    None if prediction.get("start") is None else int(prediction["start"])
+                ),
+                end_offset=(
+                    None if prediction.get("end") is None else int(prediction["end"])
+                ),
+                language=language,
+            )
         )
-        for prediction in predictions
-    ]
     return NamedEntities(
         text=text,
         spans=entities,
         languages=None if language is None else [language],
     )
+
+
+def _named_entity_type_for_label(label: str) -> NamedEntityType:
+    """Map exact canonical GLiNER labels and classify other labels as OTHER."""
+    try:
+        return NamedEntityType(label.strip().casefold())
+    except ValueError:
+        return NamedEntityType.OTHER
 
 
 def _validate_text(text: str) -> None:
