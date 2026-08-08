@@ -11,7 +11,6 @@ def main() -> None:
     extractor = GlinerNamedEntityExtractor()
     result = extractor.process(
         TEXT,
-        ["person", "organization", "location"],
         threshold=0.4,
     )
     print(result.model_dump_yaml(sort_keys=False))

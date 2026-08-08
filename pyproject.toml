@@ -1,6 +1,6 @@
 [project]
 name = "ampav-gliner"
-version = "0.0.4"
+version = "0.0.5"
 description = "GLiNER tooling for the AMPAV environment"
 readme = "README.md"
 license = "Apache-2.0"
@@ -13,7 +13,7 @@ authors = [
 
 requires-python = ">=3.12"
 dependencies = [
-    "ampav-core>=0.0.18",
+    "ampav-core>=0.0.20",
     "datasets",
     "evaluate",
     "gliner==0.2.28",

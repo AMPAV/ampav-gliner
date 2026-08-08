@@ -8,7 +8,7 @@ import re
 from time import time
 from typing import Any
 
-from ampav.core.schema import NamedEntities, NamedEntity, ToolOutput
+from ampav.core.schema import NamedEntities, NamedEntity, NamedEntityType, ToolOutput
 from ampav.core.text_chunking import (
     TextChunk,
     TextUnit,
@@ -21,6 +21,18 @@ from ._version import DISTRIBUTION_NAME, __version__
 
 
 DEFAULT_MODEL_ID = "urchade/gliner_small-v2.1"
+DEFAULT_NAMED_ENTITY_LABELS = (
+    "person",
+    "organization",
+    "location",
+    "event",
+    "date",
+    "title",
+    "brand",
+    "product",
+    "service",
+    "quantity",
+)
 logger = logging.getLogger(__name__)
 
 
@@ -123,7 +135,7 @@ class GlinerNamedEntityExtractor:
     def process(
         self,
         text: str,
-        labels: Sequence[str],
+        labels: Sequence[str] | None = None,
         *,
         threshold: float | None = None,
         flat_ner: bool = True,
@@ -140,7 +152,8 @@ class GlinerNamedEntityExtractor:
 
         Args:
             text: Original source text. Final entity offsets refer to this text.
-            labels: Non-empty, unique entity labels requested from GLiNER.
+            labels: Entity labels requested from GLiNER. ``None`` uses a small
+                starter vocabulary; an empty list is invalid.
             threshold: Optional confidence threshold; ``None`` uses GLiNER's
                 default.
             flat_ner: If true, prevent nested entity spans.
@@ -168,7 +181,7 @@ class GlinerNamedEntityExtractor:
         self,
         text: str,
         units: Sequence[TextUnit],
-        labels: Sequence[str],
+        labels: Sequence[str] | None = None,
         *,
         threshold: float | None = None,
         flat_ner: bool = True,
@@ -187,7 +200,7 @@ class GlinerNamedEntityExtractor:
         callers should use :meth:`process`.
         """
         _validate_text(text)
-        clean_labels = _validate_labels(labels)
+        clean_labels = _resolve_labels(labels)
         max_tokens = self._model_max_tokens()
         chunks = chunk_text(
             text,
@@ -319,30 +332,44 @@ def _gliner_predictions_to_named_entities(
     language: str | None = None,
 ) -> NamedEntities:
     """Convert chunk-local GLiNER dictionaries into AMPAV entities."""
-    entities = [
-        NamedEntity(
-            text=str(prediction["text"]),
-            entity_type=str(prediction["label"]),
-            confidence=(
-                None
-                if prediction.get("score") is None
-                else float(prediction["score"])
-            ),
-            begin_offset=(
-                None if prediction.get("start") is None else int(prediction["start"])
-            ),
-            end_offset=(
-                None if prediction.get("end") is None else int(prediction["end"])
-            ),
-            language=language,
+    entities = []
+    for prediction in predictions:
+        label = str(prediction["label"])
+        entities.append(
+            NamedEntity(
+                text=str(prediction["text"]),
+                type=_named_entity_type_for_label(label),
+                label=label,
+                confidence=(
+                    None
+                    if prediction.get("score") is None
+                    else float(prediction["score"])
+                ),
+                begin_offset=(
+                    None if prediction.get("start") is None else int(prediction["start"])
+                ),
+                end_offset=(
+                    None if prediction.get("end") is None else int(prediction["end"])
+                ),
+                language=language,
+            )
         )
-        for prediction in predictions
-    ]
     return NamedEntities(
         text=text,
         spans=entities,
         languages=None if language is None else [language],
     )
+
+
+def _named_entity_type_for_label(label: str) -> NamedEntityType:
+    """Map supported GLiNER labels and classify other labels as OTHER."""
+    normalized_label = "_".join(label.strip().casefold().split())
+    if normalized_label in {"commercial_item", "product", "service"}:
+        return NamedEntityType.BRAND
+    try:
+        return NamedEntityType(normalized_label)
+    except ValueError:
+        return NamedEntityType.OTHER
 
 
 def _validate_text(text: str) -> None:
@@ -351,6 +378,13 @@ def _validate_text(text: str) -> None:
         raise TypeError("text must be a string")
     if not text.strip():
         raise ValueError("text must not be empty")
+
+
+def _resolve_labels(labels: Sequence[str] | None) -> list[str]:
+    """Return explicit labels or the GLiNER starter labels."""
+    if labels is None:
+        return list(DEFAULT_NAMED_ENTITY_LABELS)
+    return _validate_labels(labels)
 
 
 def _validate_labels(labels: Sequence[str]) -> list[str]:

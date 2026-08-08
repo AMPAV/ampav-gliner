@@ -3,9 +3,10 @@ import unittest
 from importlib.metadata import version
 from types import SimpleNamespace
 
-from ampav.core.schema import NamedEntities, ToolOutput
+from ampav.core.schema import NamedEntities, NamedEntityType, ToolOutput
 
 from ampav.gliner import (
+    DEFAULT_NAMED_ENTITY_LABELS,
     GlinerNamedEntityExtractor,
 )
 
@@ -166,7 +167,7 @@ def assert_probe_case(
     test_case.assertEqual(result.messages, [], name)
 
     actual_entities = [
-        (entity.text, entity.entity_type, entity.begin_offset, entity.end_offset)
+        (entity.text, entity.label, entity.begin_offset, entity.end_offset)
         for entity in result.output.spans
     ]
     test_case.assertEqual(actual_entities, expected_entities, name)
@@ -208,11 +209,53 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
         self.assertEqual(result.output.languages, ["en"])
         self.assertEqual(len(result.output.spans), 2)
         self.assertEqual(result.output.spans[0].text, "Maya Chen")
-        self.assertEqual(result.output.spans[0].entity_type, "person")
+        self.assertEqual(result.output.spans[0].label, "person")
+        self.assertEqual(result.output.spans[0].type, NamedEntityType.PERSON)
         self.assertEqual(result.output.spans[0].confidence, 0.98)
         self.assertEqual(result.output.spans[0].begin_offset, 0)
         self.assertEqual(result.output.spans[0].end_offset, 9)
         self.assertEqual(result.output.spans[0].language, "en")
+
+    def test_process_maps_commercial_labels_and_arbitrary_label(self) -> None:
+        model = FakeGlinerModel(
+            [
+                {
+                    "start": 0,
+                    "end": 6,
+                    "text": "Kindle",
+                    "label": "product",
+                    "score": 0.95,
+                },
+                {
+                    "start": 7,
+                    "end": 13,
+                    "text": "Nimbus",
+                    "label": "service",
+                    "score": 0.92,
+                },
+                {
+                    "start": 14,
+                    "end": 20,
+                    "text": "ENG-42",
+                    "label": "product code",
+                    "score": 0.9,
+                }
+            ]
+        )
+        extractor = GlinerNamedEntityExtractor(model=model)
+
+        result = extractor.process(
+            "Kindle Nimbus ENG-42",
+            ["product", "service", "product code"],
+        )
+
+        assert isinstance(result.output, NamedEntities)
+        self.assertEqual(result.output.spans[0].label, "product")
+        self.assertEqual(result.output.spans[0].type, NamedEntityType.BRAND)
+        self.assertEqual(result.output.spans[1].label, "service")
+        self.assertEqual(result.output.spans[1].type, NamedEntityType.BRAND)
+        self.assertEqual(result.output.spans[2].label, "product code")
+        self.assertEqual(result.output.spans[2].type, NamedEntityType.OTHER)
 
     def test_process_records_model_and_inference_parameters(self) -> None:
         model = FakeGlinerModel([])
@@ -271,6 +314,17 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
         extractor.process("Maya Chen visited Bloomington.", ["person"])
 
         self.assertEqual(model.calls[0]["kwargs"], {"flat_ner": True, "multi_label": False})
+
+    def test_process_uses_starter_labels_when_labels_are_omitted(self) -> None:
+        model = FakeGlinerModel([])
+        extractor = GlinerNamedEntityExtractor(model=model)
+
+        result = extractor.process("Maya Chen visited Bloomington.")
+
+        self.assertEqual(model.calls[0]["labels"], list(DEFAULT_NAMED_ENTITY_LABELS))
+        self.assertEqual(result.parameters["labels"], list(DEFAULT_NAMED_ENTITY_LABELS))
+        self.assertIn("product", DEFAULT_NAMED_ENTITY_LABELS)
+        self.assertIn("service", DEFAULT_NAMED_ENTITY_LABELS)
 
     def test_process_includes_raw_predictions_when_requested(self) -> None:
         predictions = [
@@ -412,6 +466,8 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
 
     def test_validate_labels_rejects_empty_labels(self) -> None:
         extractor = GlinerNamedEntityExtractor(model=FakeGlinerModel([]))
+        with self.assertRaises(ValueError):
+            extractor.process("Maya Chen visited Bloomington.", [])
         with self.assertRaises(ValueError):
             extractor.process("Maya Chen visited Bloomington.", ["person", " "])
 

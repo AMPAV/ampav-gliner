@@ -20,8 +20,12 @@ def build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument("text_file", help="Path to a UTF-8 text file")
     parser.add_argument(
         "labels",
-        nargs="+",
-        help="One or more entity labels, such as person organization location",
+        nargs="*",
+        default=None,
+        help=(
+            "Optional entity labels, such as person organization location; "
+            "omit them to use the GLiNER starter labels"
+        ),
     )
     parser.add_argument(
         "--model-id",
@@ -82,7 +86,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         result = extract_named_entities_from_file(
             args.text_file,
-            args.labels,
+            args.labels or None,
             extractor=extractor,
             threshold=args.threshold,
             flat_ner=not args.nested_ner,

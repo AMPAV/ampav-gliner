@@ -16,7 +16,7 @@ class FakeExtractor:
         self.process_calls: list[dict] = []
         FakeExtractor.instances.append(self)
 
-    def process(self, text: str, labels: list[str], **kwargs: object) -> ToolOutput:
+    def process(self, text: str, labels: list[str] | None, **kwargs: object) -> ToolOutput:
         self.process_calls.append({"text": text, "labels": labels, **kwargs})
         return ToolOutput(
             tool_name="gliner",
@@ -54,6 +54,27 @@ class GlinerCliTest(unittest.TestCase):
         self.assertTrue(args.multi_label)
         self.assertEqual(args.chunk_overlap_tokens, 16)
         self.assertTrue(args.include_tool_private)
+
+    def test_parser_uses_default_labels_when_omitted(self) -> None:
+        args = cli.build_cli_parser().parse_args(["input.txt"])
+
+        self.assertEqual(args.labels, [])
+
+    def test_main_uses_default_labels_when_omitted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            text_path = Path(temp_dir) / "input.txt"
+            text_path.write_text("Maya Chen visited Bloomington.", encoding="utf-8")
+
+            original = cli.GlinerNamedEntityExtractor
+            cli.GlinerNamedEntityExtractor = FakeExtractor
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    exit_code = cli.main([str(text_path)])
+            finally:
+                cli.GlinerNamedEntityExtractor = original
+
+        self.assertEqual(exit_code, 0)
+        self.assertIsNone(FakeExtractor.instances[0].process_calls[0]["labels"])
 
     def test_main_reads_file_and_prints_tool_output_yaml(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
