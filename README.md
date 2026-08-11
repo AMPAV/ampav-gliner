@@ -23,10 +23,12 @@ result = extractor.process(
 print(result.model_dump_yaml(sort_keys=False))
 ```
 
-When labels are omitted, `process(...)` uses a small starter vocabulary. It is
-not exhaustive; pass a label list to replace it, or extend
-`DEFAULT_NAMED_ENTITY_LABELS` with application-specific labels. `process(...)`
-uses the loaded model's `config.max_len` automatically. Set
+When labels are omitted, `process(...)` derives its defaults from the concrete
+core `NamedEntityType` values. The list is not exhaustive; pass a label list to
+replace it, or extend `DEFAULT_NAMED_ENTITY_LABELS` with application-specific
+labels. Labels outside the core type strings retain their native value and use
+the canonical type `OTHER`, allowing clients to apply their own mapping.
+`process(...)` uses the loaded model's `config.max_len` automatically. Set
 `chunk_overlap_tokens` when entity detection needs context around long-text
 chunk boundaries. Raw per-chunk model predictions are omitted by default; use
 `include_tool_private=True` on the extractor only for troubleshooting.
@@ -57,7 +59,7 @@ See `examples/gliner_text_example.py` and
 ## CLI
 
 The one-shot CLI accepts a UTF-8 text file followed by optional labels and
-prints `ToolOutput` YAML. With no labels, it uses the GLiNER starter vocabulary:
+prints `ToolOutput` YAML. With no labels, it uses the AMPAV entity type labels:
 
 ```bash
 ampav_gliner_entities transcript.txt --threshold 0.4

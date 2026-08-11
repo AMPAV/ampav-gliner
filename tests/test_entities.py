@@ -216,46 +216,55 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
         self.assertEqual(result.output.spans[0].end_offset, 9)
         self.assertEqual(result.output.spans[0].language, "en")
 
-    def test_process_maps_commercial_labels_and_arbitrary_label(self) -> None:
+    def test_process_maps_only_literal_canonical_labels(self) -> None:
         model = FakeGlinerModel(
             [
                 {
                     "start": 0,
                     "end": 6,
-                    "text": "Kindle",
-                    "label": "product",
+                    "text": "Amazon",
+                    "label": "brand",
                     "score": 0.95,
                 },
                 {
                     "start": 7,
                     "end": 13,
-                    "text": "Nimbus",
-                    "label": "service",
+                    "text": "Kindle",
+                    "label": "product",
                     "score": 0.92,
                 },
                 {
                     "start": 14,
                     "end": 20,
-                    "text": "ENG-42",
-                    "label": "product code",
+                    "text": "Nimbus",
+                    "label": "service",
                     "score": 0.9,
-                }
+                },
+                {
+                    "start": 21,
+                    "end": 27,
+                    "text": "Widget",
+                    "label": "commercial item",
+                    "score": 0.88,
+                },
             ]
         )
         extractor = GlinerNamedEntityExtractor(model=model)
 
         result = extractor.process(
-            "Kindle Nimbus ENG-42",
-            ["product", "service", "product code"],
+            "Amazon Kindle Nimbus Widget",
+            ["brand", "product", "service", "commercial item"],
         )
 
         assert isinstance(result.output, NamedEntities)
-        self.assertEqual(result.output.spans[0].label, "product")
+        self.assertEqual(result.output.spans[0].label, "brand")
         self.assertEqual(result.output.spans[0].type, NamedEntityType.BRAND)
-        self.assertEqual(result.output.spans[1].label, "service")
-        self.assertEqual(result.output.spans[1].type, NamedEntityType.BRAND)
-        self.assertEqual(result.output.spans[2].label, "product code")
+        self.assertEqual(result.output.spans[1].label, "product")
+        self.assertEqual(result.output.spans[1].type, NamedEntityType.OTHER)
+        self.assertEqual(result.output.spans[2].label, "service")
         self.assertEqual(result.output.spans[2].type, NamedEntityType.OTHER)
+        self.assertEqual(result.output.spans[3].label, "commercial item")
+        self.assertEqual(result.output.spans[3].type, NamedEntityType.OTHER)
 
     def test_process_records_model_and_inference_parameters(self) -> None:
         model = FakeGlinerModel([])
@@ -315,16 +324,20 @@ class GlinerNamedEntityExtractorTest(unittest.TestCase):
 
         self.assertEqual(model.calls[0]["kwargs"], {"flat_ner": True, "multi_label": False})
 
-    def test_process_uses_starter_labels_when_labels_are_omitted(self) -> None:
+    def test_process_derives_default_labels_from_core_types(self) -> None:
         model = FakeGlinerModel([])
         extractor = GlinerNamedEntityExtractor(model=model)
 
         result = extractor.process("Maya Chen visited Bloomington.")
 
+        expected_labels = tuple(
+            entity_type.value.replace("_", " ")
+            for entity_type in NamedEntityType
+            if entity_type not in {NamedEntityType.OTHER, NamedEntityType.UNKNOWN}
+        )
+        self.assertEqual(DEFAULT_NAMED_ENTITY_LABELS, expected_labels)
         self.assertEqual(model.calls[0]["labels"], list(DEFAULT_NAMED_ENTITY_LABELS))
         self.assertEqual(result.parameters["labels"], list(DEFAULT_NAMED_ENTITY_LABELS))
-        self.assertIn("product", DEFAULT_NAMED_ENTITY_LABELS)
-        self.assertIn("service", DEFAULT_NAMED_ENTITY_LABELS)
 
     def test_process_includes_raw_predictions_when_requested(self) -> None:
         predictions = [
