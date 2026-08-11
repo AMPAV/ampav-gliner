@@ -21,17 +21,10 @@ from ._version import DISTRIBUTION_NAME, __version__
 
 
 DEFAULT_MODEL_ID = "urchade/gliner_small-v2.1"
-DEFAULT_NAMED_ENTITY_LABELS = (
-    "person",
-    "organization",
-    "location",
-    "event",
-    "date",
-    "title",
-    "brand",
-    "product",
-    "service",
-    "quantity",
+DEFAULT_NAMED_ENTITY_LABELS = tuple(
+    entity_type.value.replace("_", " ")
+    for entity_type in NamedEntityType
+    if entity_type not in {NamedEntityType.OTHER, NamedEntityType.UNKNOWN}
 )
 logger = logging.getLogger(__name__)
 
@@ -152,8 +145,9 @@ class GlinerNamedEntityExtractor:
 
         Args:
             text: Original source text. Final entity offsets refer to this text.
-            labels: Entity labels requested from GLiNER. ``None`` uses a small
-                starter vocabulary; an empty list is invalid.
+            labels: Entity labels requested from GLiNER. ``None`` uses labels
+                derived from the concrete AMPAV named-entity types; an empty
+                list is invalid.
             threshold: Optional confidence threshold; ``None`` uses GLiNER's
                 default.
             flat_ner: If true, prevent nested entity spans.
@@ -362,10 +356,8 @@ def _gliner_predictions_to_named_entities(
 
 
 def _named_entity_type_for_label(label: str) -> NamedEntityType:
-    """Map supported GLiNER labels and classify other labels as OTHER."""
+    """Map literal AMPAV type labels and classify other labels as OTHER."""
     normalized_label = "_".join(label.strip().casefold().split())
-    if normalized_label in {"commercial_item", "product", "service"}:
-        return NamedEntityType.BRAND
     try:
         return NamedEntityType(normalized_label)
     except ValueError:
@@ -381,7 +373,7 @@ def _validate_text(text: str) -> None:
 
 
 def _resolve_labels(labels: Sequence[str] | None) -> list[str]:
-    """Return explicit labels or the GLiNER starter labels."""
+    """Return explicit labels or defaults derived from AMPAV entity types."""
     if labels is None:
         return list(DEFAULT_NAMED_ENTITY_LABELS)
     return _validate_labels(labels)

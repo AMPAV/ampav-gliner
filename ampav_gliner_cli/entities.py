@@ -24,7 +24,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Optional entity labels, such as person organization location; "
-            "omit them to use the GLiNER starter labels"
+            "omit them to use the AMPAV entity type labels"
         ),
     )
     parser.add_argument(
