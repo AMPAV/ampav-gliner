@@ -1,8 +1,9 @@
 """Probe classic GLiNER's preliminary native keyphrase behavior.
 
 The executable keeps caller-owned inputs and retained run records outside the
-library package. It supports a small quality matrix and a model-specific input
-boundary probe without defining an AMPAV schema or production API.
+library package. It supports small quality and global-relevance matrices plus a
+model-specific input-boundary probe without defining an AMPAV schema or
+production API.
 """
 
 from __future__ import annotations
@@ -25,19 +26,34 @@ import yaml
 
 DEFAULT_MODEL_ID = "knowledgator/gliner-multitask-v1.0"
 DEFAULT_MODEL_REVISION = "0f31be112e077396cc8fef5598f5ae6fdb8fec17"
+DEFAULT_COMPARISON_MODEL_ID = "knowledgator/gliner-multitask-large-v0.5"
+DEFAULT_COMPARISON_MODEL_REVISION = "7a95e168036db9ec6f914c0cc6b218edbd87f310"
 DEFAULT_PROMPT = "Extract important, content-bearing key phrases:"
+DEFAULT_RELEVANCE_PROMPT = (
+    "Extract phrases that best represent the main subjects of the entire text; "
+    "exclude generic noun phrases, pronouns, and incidental details."
+)
+DEFAULT_SUMMARY_PROMPT = (
+    "Summarize the following text highlighting the most important information:"
+)
 DEFAULT_BOUNDARY_PROMPT = (
     "Extract important, content-bearing key phrases that identify the central "
     "subjects, methods, events, and concepts in the following text:"
 )
 DEFAULT_THRESHOLDS = [0.1, 0.3, 0.5]
 DEFAULT_LABEL_VARIANTS = ["key phrase", "keyphrase", "topic", "concept"]
+DEFAULT_RELEVANCE_LABELS = [
+    "key phrase",
+    "key concept",
+    "important topic",
+    "subject term",
+]
 EARLY_SENTINEL = "silver metadata compass"
 END_SENTINEL = "crimson archive beacon"
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse quality or boundary probe arguments."""
+    """Parse quality, relevance, or boundary probe arguments."""
     parser = argparse.ArgumentParser(
         description="Run preliminary native GLiNER keyphrase probes.",
     )
@@ -71,6 +87,24 @@ def parse_args() -> argparse.Namespace:
     quality.add_argument("--label-threshold", type=float, default=0.3)
     quality.add_argument("--repeat", type=int, default=1)
 
+    relevance = subparsers.add_parser(
+        "relevance",
+        help="compare global-relevance prompts and labels across two models",
+    )
+    relevance.add_argument("input", type=Path, help="UTF-8 source text")
+    relevance.add_argument("output_dir", type=Path, help="new retained-run directory")
+    _add_model_arguments(relevance)
+    relevance.add_argument(
+        "--comparison-model-id",
+        default=DEFAULT_COMPARISON_MODEL_ID,
+    )
+    relevance.add_argument(
+        "--comparison-model-revision",
+        default=DEFAULT_COMPARISON_MODEL_REVISION,
+    )
+    relevance.add_argument("--prompt", default=DEFAULT_RELEVANCE_PROMPT)
+    relevance.add_argument("--threshold", type=float, default=0.25)
+
     boundary = subparsers.add_parser(
         "boundary",
         help="probe native word and transformer input boundaries",
@@ -98,14 +132,29 @@ def _add_model_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _load_model(args: argparse.Namespace) -> Any:
     """Load the selected classic GLiNER model."""
+    return _load_model_settings(
+        args.model_id,
+        args.model_revision,
+        args.device,
+        args.allow_download,
+    )
+
+
+def _load_model_settings(
+    model_id: str,
+    model_revision: str,
+    device: str,
+    allow_download: bool,
+) -> Any:
+    """Load one explicitly selected classic GLiNER model."""
     from gliner import GLiNER
 
     model = GLiNER.from_pretrained(
-        args.model_id,
-        revision=args.model_revision,
-        local_files_only=not args.allow_download,
+        model_id,
+        revision=model_revision,
+        local_files_only=not allow_download,
     )
-    return model.to(args.device)
+    return model.to(device)
 
 
 def _capture_call(call: Callable[[], Any]) -> tuple[Any, float, list[str]]:
@@ -378,6 +427,143 @@ def _run_quality(args: argparse.Namespace, model: Any) -> dict[str, Any]:
     }
 
 
+def _run_prediction_case(
+    model: Any,
+    source: str,
+    *,
+    prompt: str | None,
+    label: str,
+    threshold: float,
+    batch_size: int,
+) -> dict[str, Any]:
+    """Run one direct native call and retain prompt-relative diagnostics."""
+    if prompt is None:
+        prepared_text = source
+        source_start = 0
+    else:
+        prepared_text, source_start = _prompted_text(prompt, source)
+    predictions, duration, emitted = _capture_call(
+        lambda: model.predict_entities(
+            prepared_text,
+            [label],
+            threshold=threshold,
+            batch_size=batch_size,
+        )
+    )
+    return {
+        "prompt": prompt,
+        "label": label,
+        "threshold": threshold,
+        "source_start": source_start,
+        "prepared_gliner_word_count": len(_word_tokens(model, prepared_text)),
+        "duration_seconds": round(duration, 3),
+        "warnings": emitted,
+        "native_predictions": predictions,
+        "prediction_analysis": _analyze_predictions(
+            predictions,
+            prepared_text,
+            source_start,
+        ),
+    }
+
+
+def _run_relevance_model(
+    model: Any,
+    source: str,
+    *,
+    model_id: str,
+    model_revision: str,
+    prompt: str,
+    labels: list[str],
+    threshold: float,
+    batch_size: int,
+) -> dict[str, Any]:
+    """Run the approved label-by-prompt matrix for one model."""
+    cases = []
+    for condition, active_prompt in (
+        ("unprompted", None),
+        ("global_relevance_prompt", prompt),
+    ):
+        for label in labels:
+            print(
+                f"Running {model_id}: {condition}, label={label!r}",
+                file=sys.stderr,
+                flush=True,
+            )
+            case = _run_prediction_case(
+                model,
+                source,
+                prompt=active_prompt,
+                label=label,
+                threshold=threshold,
+                batch_size=batch_size,
+            )
+            case["condition"] = condition
+            cases.append(case)
+    return {
+        "model_id": model_id,
+        "model_revision": model_revision,
+        "model_max_len": int(model.config.max_len),
+        "source_gliner_word_count": len(_word_tokens(model, source)),
+        "cases": cases,
+    }
+
+
+def _run_relevance(
+    args: argparse.Namespace,
+    primary_model: Any,
+    comparison_model: Any,
+) -> dict[str, Any]:
+    """Run the approved final global-relevance experiment matrix."""
+    source = args.input.read_text(encoding="utf-8").strip()
+    if not source:
+        raise ValueError("input text must not be empty")
+
+    primary = _run_relevance_model(
+        primary_model,
+        source,
+        model_id=args.model_id,
+        model_revision=args.model_revision,
+        prompt=args.prompt,
+        labels=DEFAULT_RELEVANCE_LABELS,
+        threshold=args.threshold,
+        batch_size=args.batch_size,
+    )
+    comparison = _run_relevance_model(
+        comparison_model,
+        source,
+        model_id=args.comparison_model_id,
+        model_revision=args.comparison_model_revision,
+        prompt=args.prompt,
+        labels=DEFAULT_RELEVANCE_LABELS,
+        threshold=args.threshold,
+        batch_size=args.batch_size,
+    )
+    print(
+        f"Running {args.model_id}: summary control",
+        file=sys.stderr,
+        flush=True,
+    )
+    summary_control = _run_prediction_case(
+        primary_model,
+        source,
+        prompt=DEFAULT_SUMMARY_PROMPT,
+        label="summary",
+        threshold=args.threshold,
+        batch_size=args.batch_size,
+    )
+    summary_control["condition"] = "summary_prompt_control"
+    return {
+        "input_name": args.input.name,
+        "source_character_count": len(source),
+        "global_relevance_prompt": args.prompt,
+        "labels": DEFAULT_RELEVANCE_LABELS,
+        "threshold": args.threshold,
+        "models": [primary, comparison],
+        "primary_model_summary_control": summary_control,
+    }
+
+
 def _run_boundary(args: argparse.Namespace, model: Any, output_dir: Path) -> dict[str, Any]:
     """Run focused first-stage and transformer boundary cases."""
     max_len = int(model.config.max_len)
@@ -450,7 +636,7 @@ def _write_run_record(
     args: argparse.Namespace,
     output_dir: Path,
     started_at: str,
-    load_seconds: float,
+    load_seconds: float | dict[str, float],
     result: dict[str, Any],
 ) -> None:
     """Write command, manifest, native JSON, and concise run notes."""
@@ -467,14 +653,23 @@ def _write_run_record(
         "batch_size": args.batch_size,
         "python_version": platform.python_version(),
         "torch_version": str(torch.__version__),
-        "model_load_seconds": round(load_seconds, 3),
+        "model_load_seconds": (
+            round(load_seconds, 3)
+            if isinstance(load_seconds, float)
+            else {key: round(value, 3) for key, value in load_seconds.items()}
+        ),
     }
+    if args.probe == "relevance":
+        manifest["comparison_model_id"] = args.comparison_model_id
+        manifest["comparison_model_revision"] = args.comparison_model_revision
     (output_dir / "command.txt").write_text(
         shlex.join([sys.executable, *sys.argv]) + "\n",
         encoding="utf-8",
     )
     input_description = (
-        str(args.input.resolve()) if args.probe == "quality" else "generated boundary inputs under inputs/"
+        str(args.input.resolve())
+        if args.probe in {"quality", "relevance"}
+        else "generated boundary inputs under inputs/"
     )
     (output_dir / "input_ref.txt").write_text(
         f"Input: {input_description}\n",
@@ -495,7 +690,7 @@ def _write_run_record(
 
 
 def main() -> None:
-    """Load one cached model and retain the selected native probe."""
+    """Load cached model(s) and retain the selected native probe."""
     args = parse_args()
     if args.output_dir.exists():
         raise FileExistsError(f"output directory already exists: {args.output_dir}")
@@ -508,7 +703,31 @@ def main() -> None:
     load_seconds = perf_counter() - load_started
     print(f"Model loaded in {load_seconds:.2f}s", file=sys.stderr, flush=True)
 
-    if args.probe == "quality":
+    if args.probe == "relevance":
+        print(
+            f"Loading {args.comparison_model_id} on {args.device}",
+            file=sys.stderr,
+            flush=True,
+        )
+        comparison_load_started = perf_counter()
+        comparison_model = _load_model_settings(
+            args.comparison_model_id,
+            args.comparison_model_revision,
+            args.device,
+            args.allow_download,
+        )
+        comparison_load_seconds = perf_counter() - comparison_load_started
+        print(
+            f"Comparison model loaded in {comparison_load_seconds:.2f}s",
+            file=sys.stderr,
+            flush=True,
+        )
+        result = _run_relevance(args, model, comparison_model)
+        load_seconds = {
+            args.model_id: load_seconds,
+            args.comparison_model_id: comparison_load_seconds,
+        }
+    elif args.probe == "quality":
         result = _run_quality(args, model)
     else:
         result = _run_boundary(args, model, args.output_dir)

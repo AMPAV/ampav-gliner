@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stderr
 import importlib.util
+from io import StringIO
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 import yaml
@@ -23,6 +26,7 @@ _analyze_predictions = PROBE._analyze_predictions
 _build_boundary_source = PROBE._build_boundary_source
 _contains_subsequence = PROBE._contains_subsequence
 _prompted_text = PROBE._prompted_text
+_run_relevance_model = PROBE._run_relevance_model
 _write_run_record = PROBE._write_run_record
 
 
@@ -34,6 +38,31 @@ class FakeWhitespaceModel:
         starts = [list(range(len(item))) for item in tokens]
         ends = [list(range(1, len(item) + 1)) for item in tokens]
         return tokens, starts, ends
+
+
+class FakePredictionModel(FakeWhitespaceModel):
+    """Retain direct native calls for relevance-matrix assertions."""
+
+    def __init__(self) -> None:
+        self.config = SimpleNamespace(max_len=128)
+        self.calls: list[dict[str, object]] = []
+
+    def predict_entities(
+        self,
+        text: str,
+        labels: list[str],
+        **kwargs: object,
+    ) -> list[dict[str, object]]:
+        self.calls.append({"text": text, "labels": labels, "kwargs": kwargs})
+        start = text.index("Source")
+        return [
+            {
+                "text": "Source",
+                "label": labels[0],
+                "start": start,
+                "end": start + len("Source"),
+            }
+        ]
 
 
 class GlinerKeyphraseProbeTest(unittest.TestCase):
@@ -81,6 +110,45 @@ class GlinerKeyphraseProbeTest(unittest.TestCase):
     def test_contains_subsequence_requires_contiguous_order(self) -> None:
         self.assertTrue(_contains_subsequence([1, 2, 3, 4], [2, 3]))
         self.assertFalse(_contains_subsequence([1, 2, 3, 4], [2, 4]))
+
+    def test_relevance_model_crosses_labels_with_prompt_conditions(self) -> None:
+        model = FakePredictionModel()
+
+        with redirect_stderr(StringIO()):
+            result = _run_relevance_model(
+                model,
+                "Source text",
+                model_id="test/model",
+                model_revision="abc123",
+                prompt="Extract globally relevant phrases.",
+                labels=["key phrase", "subject term"],
+                threshold=0.25,
+                batch_size=4,
+            )
+
+        self.assertEqual(len(result["cases"]), 4)
+        self.assertEqual(
+            [case["condition"] for case in result["cases"]],
+            [
+                "unprompted",
+                "unprompted",
+                "global_relevance_prompt",
+                "global_relevance_prompt",
+            ],
+        )
+        self.assertEqual(model.calls[0]["text"], "Source text")
+        self.assertTrue(
+            str(model.calls[-1]["text"]).startswith(
+                "Extract globally relevant phrases."
+            )
+        )
+        self.assertTrue(
+            all(
+                analysis["slice_matches_prepared_text"]
+                for case in result["cases"]
+                for analysis in case["prediction_analysis"]
+            )
+        )
 
     def test_run_record_serializes_runtime_versions(self) -> None:
         args = argparse.Namespace(
