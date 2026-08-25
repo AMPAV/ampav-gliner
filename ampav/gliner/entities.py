@@ -17,7 +17,7 @@ from ampav.core.text_chunking import (
     text_to_units,
 )
 
-from ._version import DISTRIBUTION_NAME, __version__
+from . import DISTRIBUTION_NAME, __version__
 
 
 DEFAULT_MODEL_ID = "urchade/gliner_small-v2.1"

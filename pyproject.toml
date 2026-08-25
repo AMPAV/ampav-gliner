@@ -1,6 +1,6 @@
 [project]
 name = "ampav-gliner"
-version = "0.0.5"
+dynamic = ["version"]
 description = "GLiNER tooling for the AMPAV environment"
 readme = "README.md"
 license = "Apache-2.0"
@@ -27,6 +27,9 @@ Issues = "https://github.com/AMPAV/ampav-gliner/issues"
 
 [project.scripts]
 ampav_gliner_entities = "ampav_gliner_cli.entities:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "ampav.gliner.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]
