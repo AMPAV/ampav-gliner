@@ -1,5 +1,8 @@
 """GLiNER tools for AMPAV."""
 
+__version__ = "0.0.5"
+DISTRIBUTION_NAME = "ampav-gliner"
+
 from .classification import GlinerTextClassifier
 from .entities import (
     DEFAULT_MODEL_ID,
@@ -15,7 +18,6 @@ from .keyphrases import (
     GlinerKeyPhraseExtractor,
 )
 from .summary import GlinerSummarizer
-from ._version import __version__
 
 
 __all__ = [
