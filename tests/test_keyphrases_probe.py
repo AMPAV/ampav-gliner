@@ -14,8 +14,8 @@ import unittest
 import yaml
 
 
-PROBE_PATH = Path(__file__).parents[1] / "examples" / "gliner_keyphrases_phase1.py"
-SPEC = importlib.util.spec_from_file_location("gliner_keyphrases_phase1", PROBE_PATH)
+PROBE_PATH = Path(__file__).parents[1] / "experiments" / "gliner_keyphrases.py"
+SPEC = importlib.util.spec_from_file_location("gliner_keyphrases", PROBE_PATH)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError(f"could not load probe module from {PROBE_PATH}")
 PROBE = importlib.util.module_from_spec(SPEC)
